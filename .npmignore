@@ -1,0 +1,27 @@
+# Build artifacts
+target/
+*.node
+
+# Node modules
+node_modules/
+
+# Source / test / docs (not needed in npm package)
+src/
+tests/
+specs/
+.specify/
+.github/
+scripts/download-model.js
+
+# Config
+.gitignore
+.npmignore
+Cargo.toml
+Cargo.lock
+build.rs
+vitest.config.ts
+tsconfig.json
+
+# Dev files
+*.log
+.DS_Store

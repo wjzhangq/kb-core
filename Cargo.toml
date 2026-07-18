@@ -1,0 +1,85 @@
+[package]
+name = "kb-core"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.78"
+description = "Local-first knowledge-base recall engine: BM25 + multilingual-e5-small vectors + RRF"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# napi-rs FFI
+napi = { version = "2", features = ["async", "tokio_rt", "error_anyhow"] }
+napi-derive = "2"
+
+# Full-text index
+tantivy = "0.22"
+tantivy-jieba = "0.11"
+
+# SQLite + vector extension
+rusqlite = { version = "0.31", features = ["bundled", "functions", "load_extension"] }
+sqlite-vec = "0.1"
+
+# Embedding inference
+fastembed = { version = "4", default-features = false, features = ["ort-load-dynamic"] }
+
+# ZIP (for docx parsing)
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP client (remote parse)
+reqwest = { version = "0.12", features = ["multipart", "stream", "json"] }
+
+# Parallel iteration
+rayon = "1"
+
+# Cross-platform file lock
+fs4 = { version = "0.12", features = ["sync"] }
+
+# Secure temp files
+tempfile = "3"
+
+# Checksums (model SHA256)
+sha2 = "0.10"
+hex = "0.4"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Misc utilities
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono = { version = "0.4", features = ["serde"] }
+once_cell = "1"
+parking_lot = "0.12"
+
+# Platform-specific thread priority
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_System_Threading",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Foundation",
+] }
+
+[build-dependencies]
+napi-build = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[features]
+default = []

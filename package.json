@@ -1,0 +1,54 @@
+{
+  "name": "kb-core",
+  "version": "0.0.1",
+  "description": "Local-first recall engine: BM25 + multilingual-e5-small + RRF",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/owner/kb-core.git"
+  },
+  "napi": {
+    "binaryName": "kb-core",
+    "targets": [
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-pc-windows-msvc"
+    ]
+  },
+  "scripts": {
+    "artifacts": "napi artifacts",
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "prepublishOnly": "napi prepublish -t npm",
+    "test": "vitest run",
+    "postinstall": "node scripts/download-model.js || true",
+    "version": "napi version"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "*.node",
+    "scripts/",
+    "models/"
+  ],
+  "keywords": ["knowledge-base", "bm25", "embeddings", "rag", "napi-rs"],
+  "devDependencies": {
+    "@napi-rs/cli": "^3.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0"
+  },
+  "optionalDependencies": {
+    "@kb-core/darwin-arm64": "0.0.1",
+    "@kb-core/darwin-x64": "0.0.1",
+    "@kb-core/linux-x64-gnu": "0.0.1",
+    "@kb-core/linux-arm64-gnu": "0.0.1",
+    "@kb-core/win32-x64-msvc": "0.0.1"
+  },
+  "engines": {
+    "node": ">= 18"
+  }
+}
