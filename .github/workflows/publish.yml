@@ -1,25 +1,44 @@
 name: Publish
 
+# Compile + publish ONLY on version tags. Nothing builds off-tag.
 on:
   push:
     tags:
       - "v*"
 
+permissions:
+  contents: read
+
 jobs:
+  # ---- Gate: lint + Rust tests once on Linux before we spend time on the matrix ----
+  check:
+    name: Clippy & cargo test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+      - name: Clippy
+        run: cargo clippy --all-targets -- --deny warnings
+      - name: Cargo test
+        run: cargo test
+
+  # ---- Build native addon for each published target ----
   build:
     name: Build ${{ matrix.target }}
+    needs: check
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            host: ubuntu-latest
+            host: ubuntu-22.04
           - target: aarch64-unknown-linux-gnu
-            host: ubuntu-22.04-arm64
-          - target: aarch64-apple-darwin
-            host: macos-latest
-          - target: x86_64-apple-darwin
-            host: macos-13
+            host: ubuntu-22.04-arm
           - target: x86_64-pc-windows-msvc
             host: windows-latest
     runs-on: ${{ matrix.host }}
@@ -33,6 +52,8 @@ jobs:
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -45,19 +66,31 @@ jobs:
       - name: Install npm deps
         run: npm ci --ignore-scripts
 
+      # ort-download-binaries fetches ONNX Runtime at build time and links it
+      # statically into the .node, so each artifact is self-contained.
       - name: Build release binary
         run: napi build --platform --release --target ${{ matrix.target }}
+
+      - name: Node integration tests
+        run: npx vitest run
+        env:
+          KB_SKIP_MODEL_DOWNLOAD: "1"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: bindings-${{ matrix.target }}
           path: "*.node"
+          if-no-files-found: error
 
+  # ---- Publish root package + per-platform sub-packages to npm ----
   publish:
     name: Publish to npm
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     needs: build
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -78,14 +111,16 @@ jobs:
         with:
           path: artifacts
 
-      - name: Move artifacts
+      # Generate npm/<triple> dirs, then place each .node into its package.
+      - name: Prepare per-platform packages
         run: |
-          cp artifacts/bindings-*/*.node .
+          napi create-npm-dirs
+          napi artifacts --output-dir artifacts
 
-      - name: Prepare npm publish (update sub-package versions)
-        run: napi prepublish -t npm
-
+      # prepublishOnly hook (napi pre-publish) publishes the sub-packages and
+      # rewrites optionalDependencies before npm publishes the root package.
       - name: Publish to npm
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

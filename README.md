@@ -109,7 +109,9 @@ BM25 + 向量混合搜索，RRF 融合排名。全部本地执行，零网络请
 
 - `npm run build:debug` — 开发构建
 - `npm run build` — 生产构建
-- 推送 `v*` tag 触发 GitHub Actions 多平台发布
+- **仅** 推送 `v*` tag 触发编译与发布（off-tag 不做任何构建）
+- 发布平台：`linux-x64-gnu`、`linux-arm64-gnu`、`win32-x64-msvc`
+- ONNX Runtime 通过 `ort-download-binaries` 在构建时静态链接进 `.node`，发布产物自包含，用户机器无需单独的 onnxruntime 动态库
 
 ## `onModelDownloadRequired`
 

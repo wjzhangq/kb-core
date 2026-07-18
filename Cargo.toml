@@ -23,7 +23,10 @@ rusqlite = { version = "0.31", features = ["bundled", "functions", "load_extensi
 sqlite-vec = "0.1"
 
 # Embedding inference
-fastembed = { version = "4", default-features = false, features = ["ort-load-dynamic"] }
+# ort-download-binaries: ONNX Runtime is fetched at build time and statically
+# linked into the .node addon, so published binaries are self-contained on
+# Windows/Linux (no separate onnxruntime.dll/.so to ship or dlopen at runtime).
+fastembed = { version = "4", default-features = false, features = ["ort-download-binaries"] }
 
 # ZIP (for docx parsing)
 zip = { version = "2", default-features = false, features = ["deflate"] }

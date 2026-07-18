@@ -4,6 +4,9 @@ const { existsSync } = require('fs')
 const { join } = require('path')
 const { platform, arch } = process
 
+// Published targets: linux-x64-gnu, linux-arm64-gnu, win32-x64-msvc.
+// darwin stays here so local dev on macOS can still load a locally-built
+// kb-core.darwin-*.node (not published to npm as a sub-package).
 const PLATFORM_MAP = {
   darwin: {
     arm64: 'darwin-arm64',
