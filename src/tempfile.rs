@@ -6,7 +6,7 @@ use tempfile::Builder as TempBuilder;
 use crate::config::TempSecurity;
 
 /// Create a secure temporary file in `{data_dir}/tmp/`.
-pub fn secure_temp_file(data_dir: &Path, security: &TempSecurity) -> Result<tempfile::NamedTempFile> {
+pub fn secure_temp_file(data_dir: &Path, _security: &TempSecurity) -> Result<tempfile::NamedTempFile> {
     let tmp_dir = data_dir.join("tmp");
     fs::create_dir_all(&tmp_dir)?;
 
@@ -19,7 +19,7 @@ pub fn secure_temp_file(data_dir: &Path, security: &TempSecurity) -> Result<temp
     set_unix_permissions(file.path())?;
 
     #[cfg(windows)]
-    if matches!(security, TempSecurity::AclRestricted) {
+    if matches!(_security, TempSecurity::AclRestricted) {
         set_windows_acl_restricted(file.path())?;
     }
 

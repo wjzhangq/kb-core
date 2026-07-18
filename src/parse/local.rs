@@ -103,7 +103,7 @@ fn split_text_into_blocks(text: &str) -> Vec<OkfBlock> {
         .collect()
 }
 
-fn extract_code_file(path: &Path, ext: &str) -> Result<Vec<OkfBlock>> {
+fn extract_code_file(path: &Path, _ext: &str) -> Result<Vec<OkfBlock>> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("read {:?}", path))?;
     Ok(vec![OkfBlock {
@@ -120,7 +120,7 @@ fn extract_eml(path: &Path) -> Result<Vec<OkfBlock>> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("read eml {:?}", path))?;
     // Minimal EML: split headers and body
-    let body = content.splitn(2, "\n\n").nth(1).unwrap_or(&content);
+    let body = content.split_once("\n\n").map(|x| x.1).unwrap_or(&content);
     let blocks = split_text_into_blocks(body);
     Ok(if blocks.is_empty() {
         vec![OkfBlock {
@@ -165,7 +165,7 @@ fn strip_xml_tags(s: &str) -> String {
     result
 }
 
-fn extract_pdf_text_layer(path: &Path) -> Result<Vec<OkfBlock>> {
+fn extract_pdf_text_layer(_path: &Path) -> Result<Vec<OkfBlock>> {
     // PDF text-layer extraction: return a single para block with raw bytes placeholder.
     // Full PDF extraction requires pdfium; for now return a marker that triggers remote parse.
     Err(anyhow::anyhow!("PDF requires remote parse or pdfium integration"))

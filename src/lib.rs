@@ -2,7 +2,7 @@
 #![allow(clippy::module_inception)]
 
 use napi_derive::napi;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use tokio::sync::Mutex;
 use anyhow::Result;
@@ -53,6 +53,9 @@ struct KBInner {
 #[napi]
 pub struct KnowledgeBase {
     inner: Arc<KBInner>,
+    // Owns the Tokio runtime for the lifetime of the KnowledgeBase; never read
+    // directly, but dropping it would shut the runtime down.
+    #[allow(dead_code)]
     rt: Arc<tokio::runtime::Runtime>,
 }
 
@@ -121,7 +124,7 @@ impl KnowledgeBase {
 // ── KBInner implementation ────────────────────────────────────────────────
 
 impl KBInner {
-    async fn open(config: Arc<KBConfig>, data_dir: &PathBuf) -> Result<Self> {
+    async fn open(config: Arc<KBConfig>, data_dir: &Path) -> Result<Self> {
         // Clean leftover tmp files
         crate::tempfile::cleanup_tmp_dir(data_dir).unwrap_or_else(|e| {
             tracing::warn!("failed to clean tmp dir: {}", e);
@@ -139,10 +142,10 @@ impl KBInner {
         // Initialize embedding engine
         let embed_engine: Option<Arc<EmbedEngine>> = match &config.inference {
             InferenceConfig::LocalFirst { model, models_dir, .. } => {
-                let mdir = PathBuf::from(models_dir.as_deref().unwrap_or_else(|| {
+                let mdir = PathBuf::from(models_dir.as_deref().unwrap_or(
                     // Default: <package_dir>/models/
-                    concat!(env!("CARGO_MANIFEST_DIR"), "/models")
-                }));
+                    concat!(env!("CARGO_MANIFEST_DIR"), "/models"),
+                ));
                 match EmbedEngine::new(model, &mdir, config.system.max_cpu_threads) {
                     Ok(e) => Some(Arc::new(e)),
                     Err(e) => {
@@ -154,11 +157,11 @@ impl KBInner {
             _ => None,
         };
 
-        let (embed_tx, embed_engine_clone) = {
-            let engine = embed_engine.clone();
-            let tx = pipeline::embed::start_embed_queue(config.clone(), db.clone(), engine);
-            (tx, embed_engine.clone())
-        };
+        let embed_tx = pipeline::embed::start_embed_queue(
+            config.clone(),
+            db.clone(),
+            embed_engine.clone(),
+        );
 
         let parse_tx = pipeline::parse::start_parse_queue(
             config.clone(),

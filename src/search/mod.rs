@@ -252,7 +252,7 @@ fn build_degraded_reason(
     config: &KBConfig,
     engine: &Option<Arc<EmbedEngine>>,
     vec_coverage: f64,
-    opts: &SearchOptions,
+    _opts: &SearchOptions,
 ) -> Option<String> {
     if matches!(config.inference, InferenceConfig::Bm25Only) {
         return Some("bm25-only mode configured".into());

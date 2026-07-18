@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use anyhow::Result;
 use parking_lot::Mutex;
@@ -132,7 +131,7 @@ impl RemoteParser {
             page: b.page,
             bbox: b.bbox.map(|v| {
                 let a: Vec<f32> = v;
-                [a.get(0).copied().unwrap_or(0.0), a.get(1).copied().unwrap_or(0.0),
+                [a.first().copied().unwrap_or(0.0), a.get(1).copied().unwrap_or(0.0),
                  a.get(2).copied().unwrap_or(0.0), a.get(3).copied().unwrap_or(0.0)]
             }),
             from_image: b.from_image,

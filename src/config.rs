@@ -48,15 +48,12 @@ impl Default for InferenceConfig {
 
 // ── Remote parse ──────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum RemoteParseUnavailablePolicy {
+    #[default]
     Wait,
     TextOnly,
     Skip,
-}
-
-impl Default for RemoteParseUnavailablePolicy {
-    fn default() -> Self { RemoteParseUnavailablePolicy::Wait }
 }
 
 #[derive(Debug, Clone)]
@@ -84,14 +81,11 @@ pub struct RemoteParseConfig {
 
 // ── System + processing ───────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum TempSecurity {
+    #[default]
     SecureTemp,
     AclRestricted,
-}
-
-impl Default for TempSecurity {
-    fn default() -> Self { TempSecurity::SecureTemp }
 }
 
 #[derive(Debug, Clone)]
@@ -317,7 +311,7 @@ pub struct JsKBStatus {
 
 impl KBConfig {
     pub fn from_js(js: JsKBConfig) -> napi::Result<Self> {
-        let inference = js.inference.map(|i| parse_inference(i)).transpose()?.unwrap_or_default();
+        let inference = js.inference.map(parse_inference).transpose()?.unwrap_or_default();
         let system = js.system.map(parse_system).unwrap_or_default();
         let processing = js.processing.map(parse_processing).unwrap_or_default();
         Ok(KBConfig { data_dir: js.data_dir, inference, system, processing })

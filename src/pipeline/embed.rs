@@ -3,9 +3,8 @@ use anyhow::Result;
 use rusqlite::params;
 use tokio::sync::mpsc;
 
-use crate::config::{InferenceConfig, KBConfig, ProcessingConfig};
+use crate::config::KBConfig;
 use crate::db::DbConn;
-use crate::db::schema::*;
 use crate::embed::EmbedEngine;
 
 /// Start the embedding background queue.

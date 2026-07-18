@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 use anyhow::Result;
 use tokio::sync::mpsc;
@@ -7,8 +6,7 @@ use rusqlite::params;
 
 use crate::config::{KBConfig, InferenceConfig, RemoteParseUnavailablePolicy};
 use crate::db::DbConn;
-use crate::db::schema::*;
-use crate::parse::{local, remote, BlockType, Okf, OkfBlock, ParsedBy, ParsedChunk};
+use crate::parse::{local, Okf, OkfBlock, ParsedChunk};
 use crate::tantivy_idx::{writer as tw, TantivyIndex};
 
 /// Doc ID dispatcher — parse loop processes one doc at a time from the channel.
@@ -231,6 +229,22 @@ pub fn build_linear_text(blocks: &[OkfBlock]) -> (String, HashMap<u32, (i64, i64
     (result, spans)
 }
 
+/// Largest char-boundary index `<= i` in `text`.
+///
+/// Equivalent to the unstable-on-our-MSRV `str::floor_char_boundary` (stable in
+/// Rust 1.91; our MSRV is 1.78), so CJK / multi-byte characters are never split
+/// mid-codepoint.
+fn floor_char_boundary(text: &str, i: usize) -> usize {
+    if i >= text.len() {
+        return text.len();
+    }
+    let mut b = i;
+    while b > 0 && !text.is_char_boundary(b) {
+        b -= 1;
+    }
+    b
+}
+
 /// Split linear text into chunks respecting token limits.
 pub fn chunk_text(text: &str, cfg: &crate::config::ProcessingConfig) -> Vec<ParsedChunk> {
     let max_chars = cfg.chunk_max_tokens * 4; // ~4 chars per token average
@@ -246,7 +260,7 @@ pub fn chunk_text(text: &str, cfg: &crate::config::ProcessingConfig) -> Vec<Pars
         // FR-001: align byte boundary to a valid UTF-8 char boundary before
         // slicing, so CJK / multi-byte characters are never split mid-codepoint.
         let end_byte = (start + max_chars).min(text.len());
-        let end = text.floor_char_boundary(end_byte);
+        let end = floor_char_boundary(text, end_byte);
 
         // Try to break at a paragraph boundary first
         let actual_end = if end < text.len() {
@@ -255,7 +269,7 @@ pub fn chunk_text(text: &str, cfg: &crate::config::ProcessingConfig) -> Vec<Pars
                 .or_else(|| text[start..end].rfind('\n').map(|p| start + p + 1))
                 .or_else(|| text[start..end].rfind(' ').map(|p| start + p + 1))
                 // FR-001: rfind fallback must also be char-boundary safe.
-                .map(|p| text.floor_char_boundary(p))
+                .map(|p| floor_char_boundary(text, p))
                 .unwrap_or(end)
         } else {
             end

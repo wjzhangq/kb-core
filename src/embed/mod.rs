@@ -1,10 +1,8 @@
 use std::sync::Arc;
 use anyhow::Result;
-use once_cell::sync::OnceCell;
-use parking_lot::Mutex;
 use std::path::Path;
 
-use crate::config::{EmbeddingModelSpec, ProcessingConfig};
+use crate::config::EmbeddingModelSpec;
 
 pub mod e5;
 

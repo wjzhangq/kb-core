@@ -1,11 +1,7 @@
-use std::sync::Arc;
 use anyhow::Result;
 use tantivy::TantivyDocument;
 
 use super::TantivyIndex;
-
-const COMMIT_BATCH_DOCS: usize = 200;
-const COMMIT_INTERVAL_MS: u64 = 1_000;
 
 /// Write a chunk into the tantivy index.
 pub fn add_chunk(
@@ -50,7 +46,7 @@ pub fn commit(idx: &TantivyIndex) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    use std::sync::Arc;
     use tantivy::{IndexReader, ReloadPolicy};
     use tempfile::TempDir;
 

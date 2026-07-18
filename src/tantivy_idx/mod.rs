@@ -4,7 +4,6 @@ use anyhow::Result;
 use parking_lot::Mutex;
 use tantivy::{
     Index, IndexReader, IndexSettings, IndexWriter, ReloadPolicy,
-    schema::{TextFieldIndexing, TextOptions, FAST, STORED},
     tokenizer::{SimpleTokenizer, TextAnalyzer},
 };
 use tantivy_jieba::JiebaTokenizer;

@@ -4,7 +4,8 @@ use std::path::Path;
 use thiserror::Error;
 
 // fs4 0.12 moved FileExt into the `fs_std` module (behind the `sync` feature).
-#[cfg(unix)]
+// Used on all platforms; fully-qualified at call sites so std's inherent
+// File::lock/unlock (1.89+) never shadow the trait on newer toolchains.
 use fs4::fs_std::FileExt;
 
 #[derive(Debug, Error)]
@@ -26,26 +27,18 @@ impl KBLock {
 
         let file = OpenOptions::new()
             .create(true)
+            // Don't truncate on open: existing diagnostic info is overwritten
+            // explicitly via set_len(0) in write_lock_info once we hold the lock.
+            .truncate(false)
             .write(true)
             .read(true)
             .open(&lock_path)?;
 
-        #[cfg(unix)]
-        {
-            use fs4::fs_std::FileExt;
-            if file.try_lock_exclusive().is_err() {
-                let held_by = read_lock_info(&lock_path);
-                return Err(KBLockError::Locked { held_by });
-            }
-        }
-
-        #[cfg(not(unix))]
-        {
-            // On Windows use fs4 too
-            if let Err(_) = file.try_lock_exclusive() {
-                let held_by = read_lock_info(&lock_path);
-                return Err(KBLockError::Locked { held_by });
-            }
+        // fs4's FileExt::try_lock_exclusive works on all platforms and is
+        // available on our MSRV, unlike std's inherent File::try_lock (1.89+).
+        if FileExt::try_lock_exclusive(&file).is_err() {
+            let held_by = read_lock_info(&lock_path);
+            return Err(KBLockError::Locked { held_by });
         }
 
         // Write diagnostic info (PID + hostname)
@@ -90,10 +83,6 @@ mod hostname {
 
 impl Drop for KBLock {
     fn drop(&mut self) {
-        #[cfg(unix)]
-        {
-            use fs4::fs_std::FileExt;
-            let _ = self._file.unlock();
-        }
+        let _ = FileExt::unlock(&self._file);
     }
 }
