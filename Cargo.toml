@@ -7,7 +7,7 @@ description = "Local-first knowledge-base recall engine: BM25 + multilingual-e5-
 license = "MIT"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 # napi-rs FFI

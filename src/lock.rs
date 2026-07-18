@@ -3,8 +3,9 @@ use std::io::{Read, Write};
 use std::path::Path;
 use thiserror::Error;
 
+// fs4 0.12 moved FileExt into the `fs_std` module (behind the `sync` feature).
 #[cfg(unix)]
-use fs4::FileExt;
+use fs4::fs_std::FileExt;
 
 #[derive(Debug, Error)]
 pub enum KBLockError {
@@ -31,7 +32,7 @@ impl KBLock {
 
         #[cfg(unix)]
         {
-            use fs4::FileExt;
+            use fs4::fs_std::FileExt;
             if file.try_lock_exclusive().is_err() {
                 let held_by = read_lock_info(&lock_path);
                 return Err(KBLockError::Locked { held_by });
@@ -91,7 +92,7 @@ impl Drop for KBLock {
     fn drop(&mut self) {
         #[cfg(unix)]
         {
-            use fs4::FileExt;
+            use fs4::fs_std::FileExt;
             let _ = self._file.unlock();
         }
     }

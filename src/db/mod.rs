@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Once;
 
 use crate::lock::{KBLock, KBLockError};
-use crate::db::migrations;
+// migrations is declared as a submodule below; no separate use needed.
 
 pub mod migrations;
 pub mod schema;

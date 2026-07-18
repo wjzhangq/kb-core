@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use anyhow::Result;
@@ -32,10 +33,17 @@ pub fn start_parse_queue(
 
             tokio::spawn(async move {
                 let _permit = permit;
-                if let Err(e) = process_doc(doc_id, &cfg, db, tantivy, embed_tx).await {
+                if let Err(e) = process_doc(doc_id, &cfg, db.clone(), tantivy, embed_tx).await {
                     tracing::error!("parse failed for doc {}: {:#}", doc_id, e);
-                    // Mark as parse_failed
-                    // (best effort — if DB fails here we can't do much)
+                    // Best-effort fallback: ensure status is not left as 'parsing'.
+                    // Uses AND status='parsing' to avoid overwriting a more-detailed
+                    // parse_failed already written by process_doc itself (FR-003).
+                    let guard = db.lock().await;
+                    let _ = guard.conn.execute(
+                        "UPDATE documents SET status='parse_failed', updated_at=?1 \
+                         WHERE doc_id=?2 AND status='parsing'",
+                        params![now_ms(), doc_id],
+                    );
                 }
             });
         }
@@ -90,8 +98,15 @@ async fn process_doc(
 
             let guard = db.lock().await;
 
-            // Store blocks
+            // Store blocks (FR-002): use HashMap lookup; skip + warn on missing block_id
             for b in &okf.blocks {
+                let Some(&(lin_start, lin_end)) = lin_blocks.get(&b.block_id) else {
+                    tracing::warn!(
+                        "doc {}: block_id {} not in lin_blocks, skipping",
+                        doc_id, b.block_id
+                    );
+                    continue;
+                };
                 guard.conn.execute(
                     "INSERT OR REPLACE INTO blocks(doc_id, block_id, type, page, bbox, from_image, lin_start, lin_end)
                      VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
@@ -102,8 +117,8 @@ async fn process_doc(
                         b.page.map(|p| p as i64),
                         b.bbox.map(|bbox| serde_json::to_string(&bbox).unwrap()),
                         b.from_image as i64,
-                        lin_blocks[b.block_id as usize].0,
-                        lin_blocks[b.block_id as usize].1,
+                        lin_start,
+                        lin_end,
                     ],
                 )?;
             }
@@ -196,16 +211,18 @@ async fn try_parse(
 }
 
 /// Build linear text from okf blocks (joined with "\n\n").
-/// Returns (linear_text, Vec<(lin_start, lin_end)> per block).
-fn build_linear_text(blocks: &[OkfBlock]) -> (String, Vec<(i64, i64)>) {
+/// Returns (linear_text, HashMap<block_id, (lin_start, lin_end)>).
+/// Keying by block_id (FR-002) avoids out-of-bounds panics when block_ids
+/// are non-contiguous or non-zero-based.
+pub fn build_linear_text(blocks: &[OkfBlock]) -> (String, HashMap<u32, (i64, i64)>) {
     let mut result = String::new();
-    let mut spans = Vec::with_capacity(blocks.len());
+    let mut spans: HashMap<u32, (i64, i64)> = HashMap::with_capacity(blocks.len());
 
     for (i, block) in blocks.iter().enumerate() {
         let start = result.len() as i64;
         result.push_str(&block.text);
         let end = result.len() as i64;
-        spans.push((start, end));
+        spans.insert(block.block_id, (start, end));
         if i + 1 < blocks.len() {
             result.push_str("\n\n");
         }
@@ -215,7 +232,7 @@ fn build_linear_text(blocks: &[OkfBlock]) -> (String, Vec<(i64, i64)>) {
 }
 
 /// Split linear text into chunks respecting token limits.
-fn chunk_text(text: &str, cfg: &crate::config::ProcessingConfig) -> Vec<ParsedChunk> {
+pub fn chunk_text(text: &str, cfg: &crate::config::ProcessingConfig) -> Vec<ParsedChunk> {
     let max_chars = cfg.chunk_max_tokens * 4; // ~4 chars per token average
     let mut chunks = Vec::new();
     let mut seq: i64 = 0;
@@ -226,7 +243,10 @@ fn chunk_text(text: &str, cfg: &crate::config::ProcessingConfig) -> Vec<ParsedCh
 
     let mut start = 0usize;
     while start < text.len() {
-        let end = (start + max_chars).min(text.len());
+        // FR-001: align byte boundary to a valid UTF-8 char boundary before
+        // slicing, so CJK / multi-byte characters are never split mid-codepoint.
+        let end_byte = (start + max_chars).min(text.len());
+        let end = text.floor_char_boundary(end_byte);
 
         // Try to break at a paragraph boundary first
         let actual_end = if end < text.len() {
@@ -234,6 +254,8 @@ fn chunk_text(text: &str, cfg: &crate::config::ProcessingConfig) -> Vec<ParsedCh
                 .map(|p| start + p + 2)
                 .or_else(|| text[start..end].rfind('\n').map(|p| start + p + 1))
                 .or_else(|| text[start..end].rfind(' ').map(|p| start + p + 1))
+                // FR-001: rfind fallback must also be char-boundary safe.
+                .map(|p| text.floor_char_boundary(p))
                 .unwrap_or(end)
         } else {
             end
@@ -267,4 +289,76 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ProcessingConfig;
+    use crate::parse::{BlockType, OkfBlock};
+
+    // T002: 200+ Chinese chars; default chunk boundary (4×chunk_max_tokens bytes)
+    // lands inside a Han codepoint without the floor_char_boundary fix.
+    const CJK_FIXTURE: &str = "这是一段用于测试分块逻辑的中文文本。\
+        它包含超过两百个汉字，以确保默认的字节切块边界会落在某个汉字的中间，\
+        从而触发修复前的 panic。每个汉字占用三个字节，因此字节步进会在字符中间断开。\
+        修复后使用 floor_char_boundary 对齐到合法的 UTF-8 字符边界，\
+        确保所有切块操作都是安全的，不会发生 panic。这段文字还包含表情：😀。\
+        继续添加更多内容以超过两百个字符的长度限制，让测试充分覆盖边界情况。";
+
+    // T003: block list with non-contiguous IDs [0, 2, 5].
+    fn non_contiguous_blocks() -> Vec<OkfBlock> {
+        vec![
+            OkfBlock { block_id: 0, block_type: BlockType::Heading, text: "Section A".into(), page: None, bbox: None, from_image: false },
+            OkfBlock { block_id: 2, block_type: BlockType::Para, text: "Gap block (id=2)".into(), page: None, bbox: None, from_image: false },
+            OkfBlock { block_id: 5, block_type: BlockType::Para, text: "Sparse block (id=5)".into(), page: None, bbox: None, from_image: false },
+        ]
+    }
+
+    // T009 — FR-001: CJK text must not panic during chunking.
+    #[test]
+    fn test_chunk_cjk() {
+        // Small chunk size forces the byte boundary to land mid-codepoint.
+        let cfg = ProcessingConfig { chunk_max_tokens: 20, ..ProcessingConfig::default() };
+        // Must not panic:
+        let chunks = chunk_text(CJK_FIXTURE, &cfg);
+        assert!(!chunks.is_empty(), "expected at least one chunk from CJK fixture");
+        for (i, chunk) in chunks.iter().enumerate() {
+            assert!(!chunk.text.is_empty(), "chunk {i} text should not be empty");
+            // Valid byte indices — would panic here if FR-001 fix is missing.
+            let start = chunk.char_start as usize;
+            let end = (chunk.char_end as usize).min(CJK_FIXTURE.len());
+            let _ = &CJK_FIXTURE[start..end];
+        }
+    }
+
+    // T010 — FR-002: non-contiguous block_id list must not panic.
+    #[test]
+    fn test_empty_paragraph_blocks() {
+        let blocks = non_contiguous_blocks();
+        // build_linear_text must not panic on non-contiguous IDs.
+        let (linear_text, spans) = build_linear_text(&blocks);
+
+        // HashMap must contain exactly the three defined block_ids.
+        assert!(spans.contains_key(&0));
+        assert!(spans.contains_key(&2));
+        assert!(spans.contains_key(&5));
+        assert_eq!(spans.len(), 3);
+
+        // Verify offsets for block 0 ("Section A" = 9 bytes).
+        assert_eq!(spans[&0], (0i64, 9i64));
+        // Block 2 starts after "\n\n": offset 11.
+        assert_eq!(spans[&2].0, 11i64);
+
+        // Simulate block-insert loop: HashMap::get must handle missing IDs without panic.
+        for block_id in [0u32, 1, 2, 3, 4, 5] {
+            match spans.get(&block_id) {
+                Some(&(lin_start, lin_end)) => {
+                    assert!(lin_end <= linear_text.len() as i64);
+                    assert!(lin_start >= 0);
+                }
+                None => { /* expected for 1, 3, 4 — no panic */ }
+            }
+        }
+    }
 }

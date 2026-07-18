@@ -119,3 +119,39 @@ describe('add() and BM25 search', () => {
     }
   })
 })
+
+// T011 — FR-003: parse failure must be visible via status() within 2 s.
+describe('parse failure status (FR-003)', () => {
+  let kb2: InstanceType<typeof KnowledgeBase>
+  const dir2 = join(os.tmpdir(), `kb-test-parse-fail-${Date.now()}`)
+
+  beforeAll(async () => {
+    mkdirSync(dir2, { recursive: true })
+    kb2 = new KnowledgeBase({
+      dataDir: dir2,
+      inference: { mode: 'bm25-only' },
+      system: { maxCpuThreads: 1 },
+    })
+  })
+
+  afterAll(async () => {
+    await kb2?.close()
+    rmSync(dir2, { recursive: true, force: true })
+  })
+
+  it('nonexistent file reaches parse_failed status (not stuck in parsing)', async () => {
+    await kb2.add('/totally-nonexistent-file-FR003.md')
+
+    // Poll until the document reaches the terminal parse_failed state.
+    const deadline = Date.now() + 10_000
+    let s = await kb2.status()
+    while (Date.now() < deadline && s.parseFailed === 0) {
+      await new Promise(r => setTimeout(r, 100))
+      s = await kb2.status()
+    }
+
+    // The document must have transitioned to parse_failed and not be stuck parsing.
+    expect(s.parseFailed).toBeGreaterThan(0)
+    expect(s.parsing).toBe(0)
+  })
+})

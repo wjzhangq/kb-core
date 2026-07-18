@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
+use std::fs;
 use anyhow::{Context, Result};
-use fastembed::{InitOptionsUserDefined, TextEmbedding, UserDefinedEmbeddingModel};
+use fastembed::{InitOptionsUserDefined, TextEmbedding, TokenizerFiles, UserDefinedEmbeddingModel};
 
 use crate::config::EmbeddingModelSpec;
 
@@ -23,8 +24,8 @@ impl E5Engine {
             ));
         }
 
-        let onnx_file = format!("model_{}.onnx", spec.quantization);
-        let onnx_path = model_path.join(&onnx_file);
+        let onnx_file_name = format!("model_{}.onnx", spec.quantization);
+        let onnx_path = model_path.join(&onnx_file_name);
         let onnx_path = if onnx_path.exists() {
             onnx_path
         } else {
@@ -44,19 +45,29 @@ impl E5Engine {
             ));
         }
 
-        let mut additional = vec![];
-        let config_path = model_path.join("tokenizer_config.json");
-        if config_path.exists() { additional.push(config_path); }
-        let special_path = model_path.join("special_tokens_map.json");
-        if special_path.exists() { additional.push(special_path); }
-
-        let user_model = UserDefinedEmbeddingModel::new(onnx_path, tokenizer_path)
-            .with_additional_files(additional);
-
-        let opts = InitOptionsUserDefined {
-            model_code: "kb-core/multilingual-e5-small".into(),
-            ..Default::default()
+        // fastembed 4: UserDefinedEmbeddingModel takes bytes, not paths.
+        // TokenizerFiles bundles all optional sidecar files.
+        let read_opt = |p: PathBuf| -> Vec<u8> {
+            if p.exists() { fs::read(&p).unwrap_or_default() } else { vec![] }
         };
+
+        let tokenizer_files = TokenizerFiles {
+            tokenizer_file: fs::read(&tokenizer_path)
+                .context("read tokenizer.json")?,
+            config_file: read_opt(model_path.join("config.json")),
+            special_tokens_map_file: read_opt(model_path.join("special_tokens_map.json")),
+            tokenizer_config_file: read_opt(model_path.join("tokenizer_config.json")),
+        };
+
+        let onnx_bytes = fs::read(&onnx_path)
+            .context("read ONNX file")?;
+
+        let user_model = UserDefinedEmbeddingModel::new(onnx_bytes, tokenizer_files);
+
+        // fastembed 4: InitOptionsUserDefined no longer has a model_code field.
+        let opts = InitOptionsUserDefined::default();
+
+        let _ = max_cpu_threads; // thread pool governed by ORT session options
 
         let model = TextEmbedding::try_new_from_user_defined(user_model, opts)
             .context("initialize fastembed TextEmbedding")?;

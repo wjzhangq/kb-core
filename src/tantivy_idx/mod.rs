@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use parking_lot::Mutex;
 use tantivy::{
-    Index, IndexSettings, IndexWriter, ReloadPolicy,
+    Index, IndexReader, IndexSettings, IndexWriter, ReloadPolicy,
     schema::{TextFieldIndexing, TextOptions, FAST, STORED},
     tokenizer::{SimpleTokenizer, TextAnalyzer},
 };
@@ -18,6 +18,8 @@ pub struct TantivyIndex {
     pub index: Index,
     pub schema: TantivySchema,
     writer: Mutex<Option<IndexWriter>>,
+    /// FR-005: singleton reader — created once, reused across all searches.
+    reader: IndexReader,
 }
 
 impl TantivyIndex {
@@ -38,10 +40,16 @@ impl TantivyIndex {
         let budget = 64 * 1024 * 1024; // 64 MB
         let iw = index.writer_with_num_threads(max_cpu_threads.max(1), budget)?;
 
+        // FR-005: build the IndexReader once; caller uses tantivy.reader() for every search.
+        let reader = index.reader_builder()
+            .reload_policy(ReloadPolicy::Manual)
+            .try_into()?;
+
         Ok(Arc::new(TantivyIndex {
             index,
             schema: ts,
             writer: Mutex::new(Some(iw)),
+            reader,
         }))
     }
 
@@ -66,16 +74,16 @@ impl TantivyIndex {
         Ok(())
     }
 
-    pub fn reader(&self) -> Result<tantivy::IndexReader> {
-        let reader = self.index.reader_builder()
-            .reload_policy(ReloadPolicy::Manual)
-            .try_into()?;
-        Ok(reader)
+    /// FR-005: returns a reference to the singleton IndexReader.
+    /// Callers call `.reload()` on it before searching to pick up new segments.
+    pub fn reader(&self) -> &IndexReader {
+        &self.reader
     }
 }
 
 fn register_tokenizers(index: &Index) {
-    let jieba_analyzer = TextAnalyzer::builder(JiebaTokenizer::new())
+    // JiebaTokenizer is a unit struct — construct it directly (no ::new()).
+    let jieba_analyzer = TextAnalyzer::builder(JiebaTokenizer)
         .filter(tantivy::tokenizer::LowerCaser)
         .build();
     index.tokenizers().register("jieba_lower", jieba_analyzer);

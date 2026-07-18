@@ -38,7 +38,8 @@ async fn process_embed(
     batch_size: usize,
 ) -> Result<()> {
     loop {
-        // Fetch a batch of pending chunks for this doc
+        // Fetch a batch of pending chunks for this doc.
+        // Pre-existing fix (E0597): collect into Vec before the lock guard drops.
         let pending: Vec<(i64, String)> = {
             let guard = db.lock().await;
             let mut stmt = guard.conn.prepare(
@@ -46,10 +47,11 @@ async fn process_embed(
                  WHERE doc_id=?1 AND embed_status=0
                  ORDER BY chunk_seq LIMIT ?2",
             )?;
-            stmt.query_map(params![doc_id, batch_size as i64], |row| {
+            let rows: Vec<(i64, String)> = stmt.query_map(params![doc_id, batch_size as i64], |row| {
                 Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
             })?
-            .collect::<Result<Vec<_>, _>>()?
+            .collect::<Result<Vec<_>, _>>()?;
+            rows
         };
 
         if pending.is_empty() {
@@ -60,12 +62,19 @@ async fn process_embed(
         let embeddings = match engine.embed_passages(&texts) {
             Ok(e) => e,
             Err(e) => {
-                // Mark batch as failed
+                // Mark chunks as failed (embed_status=2) and update the parent
+                // document's status to 'embed_failed' so callers can observe
+                // the failure via status() — FR-006.
                 let guard = db.lock().await;
                 for (chunk_id, _) in &pending {
                     guard.conn.execute(
                         "UPDATE chunks SET embed_status=2 WHERE chunk_id=?1",
                         params![chunk_id],
+                    )?;
+                    guard.conn.execute(
+                        "UPDATE documents SET status='embed_failed', updated_at=?1 \
+                         WHERE doc_id=(SELECT doc_id FROM chunks WHERE chunk_id=?2)",
+                        params![now_ms(), chunk_id],
                     )?;
                 }
                 return Err(e);

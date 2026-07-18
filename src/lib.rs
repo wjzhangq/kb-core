@@ -180,35 +180,47 @@ impl KBInner {
     }
 
     async fn add(&self, paths: Vec<String>) -> Result<Vec<JsAddResult>> {
-        let guard = self.db.lock().await;
         let now = now_ms();
         let mut results = Vec::with_capacity(paths.len());
+        let mut to_enqueue: Vec<i64> = Vec::new();
 
-        for path in &paths {
-            let doc_type = detect_doc_type(path);
-            let title = std::path::Path::new(path)
-                .file_stem()
-                .map(|s| s.to_string_lossy().into_owned());
+        // FR-007: collect all doc_ids inside the lock scope, then drop the guard
+        // before awaiting parse_tx.send().  Holding a tokio::sync::Mutex across
+        // an .await while the parse worker also needs the same lock → deadlock
+        // when the channel is full.
+        {
+            let guard = self.db.lock().await;
+            for path in &paths {
+                let doc_type = detect_doc_type(path);
+                let title = std::path::Path::new(path)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned());
 
-            // INSERT OR IGNORE — idempotent
-            let changes = guard.conn.execute(
-                "INSERT OR IGNORE INTO documents(path, title, doc_type, status, added_at, updated_at)
-                 VALUES (?1, ?2, ?3, 'pending_parse', ?4, ?5)",
-                params![path, title, doc_type, now, now],
-            )?;
-
-            if changes > 0 {
-                let doc_id: i64 = guard.conn.last_insert_rowid();
-                let _ = self.parse_tx.send(doc_id).await;
-                results.push(JsAddResult { doc_id, path: path.clone(), status: "pending_parse".into() });
-            } else {
-                let doc_id: i64 = guard.conn.query_row(
-                    "SELECT doc_id FROM documents WHERE path=?1",
-                    params![path],
-                    |row| row.get(0),
+                // INSERT OR IGNORE — idempotent
+                let changes = guard.conn.execute(
+                    "INSERT OR IGNORE INTO documents(path, title, doc_type, status, added_at, updated_at)
+                     VALUES (?1, ?2, ?3, 'pending_parse', ?4, ?5)",
+                    params![path, title, doc_type, now, now],
                 )?;
-                results.push(JsAddResult { doc_id, path: path.clone(), status: "already_indexed".into() });
+
+                if changes > 0 {
+                    let doc_id: i64 = guard.conn.last_insert_rowid();
+                    to_enqueue.push(doc_id);
+                    results.push(JsAddResult { doc_id, path: path.clone(), status: "pending_parse".into() });
+                } else {
+                    let doc_id: i64 = guard.conn.query_row(
+                        "SELECT doc_id FROM documents WHERE path=?1",
+                        params![path],
+                        |row| row.get(0),
+                    )?;
+                    results.push(JsAddResult { doc_id, path: path.clone(), status: "already_indexed".into() });
+                }
             }
+        } // guard dropped here — lock released before any .await
+
+        // Safe to await channel sends now that the DB lock is free.
+        for doc_id in to_enqueue {
+            let _ = self.parse_tx.send(doc_id).await;
         }
 
         Ok(results)
@@ -264,28 +276,28 @@ impl KBInner {
     async fn status(&self) -> Result<JsKBStatus> {
         let guard = self.db.lock().await;
 
-        // Document counts
+        // Document counts. COALESCE guards against NULL on an empty table.
         let (total, pending_parse, parsing, parsed, indexed, parse_failed): (i64,i64,i64,i64,i64,i64) =
             guard.conn.query_row(
                 "SELECT
                     COUNT(*),
-                    SUM(CASE WHEN status='pending_parse' THEN 1 ELSE 0 END),
-                    SUM(CASE WHEN status='parsing' THEN 1 ELSE 0 END),
-                    SUM(CASE WHEN status='parsed' THEN 1 ELSE 0 END),
-                    SUM(CASE WHEN status='indexed' THEN 1 ELSE 0 END),
-                    SUM(CASE WHEN status='parse_failed' THEN 1 ELSE 0 END)
+                    COALESCE(SUM(CASE WHEN status='pending_parse' THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN status='parsing'       THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN status='parsed'        THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN status='indexed'       THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN status='parse_failed'  THEN 1 ELSE 0 END), 0)
                  FROM documents",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
             )?;
 
-        // Chunk embed counts
+        // Chunk embed counts. COALESCE guards against NULL on an empty table.
         let (chunk_total, chunk_embed_done, chunk_embed_pending, chunk_embed_failed): (i64,i64,i64,i64) =
             guard.conn.query_row(
                 "SELECT COUNT(*),
-                    SUM(CASE WHEN embed_status=1 THEN 1 ELSE 0 END),
-                    SUM(CASE WHEN embed_status=0 THEN 1 ELSE 0 END),
-                    SUM(CASE WHEN embed_status=2 THEN 1 ELSE 0 END)
+                    COALESCE(SUM(CASE WHEN embed_status=1 THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN embed_status=0 THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN embed_status=2 THEN 1 ELSE 0 END), 0)
                  FROM chunks",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
@@ -313,9 +325,10 @@ impl KBInner {
                 let mut stmt = guard.conn.prepare(
                     "SELECT doc_id FROM documents WHERE status='parse_failed'"
                 )?;
-                stmt.query_map([], |row| row.get(0))?
-                    .filter_map(|r| r.ok())
-                    .collect()
+                // Pre-existing fix (E0597): bind query_map result to a local so the
+                // MappedRows temporary is dropped before guard, not after the block.
+                let mapped = stmt.query_map([], |row| row.get(0))?;
+                mapped.filter_map(|r| r.ok()).collect()
             };
             warnings.push(JsStatusWarning {
                 r#type: "parse_failed".into(),
@@ -339,9 +352,8 @@ impl KBInner {
                      WHERE d.status IN ('parsed','indexed')
                        AND NOT EXISTS (SELECT 1 FROM blocks b WHERE b.doc_id=d.doc_id)"
                 )?;
-                stmt.query_map([], |row| row.get(0))?
-                    .filter_map(|r| r.ok())
-                    .collect()
+                let mapped = stmt.query_map([], |row| row.get(0))?;
+                mapped.filter_map(|r| r.ok()).collect()
             };
             warnings.push(JsStatusWarning {
                 r#type: "missing_meta".into(),
@@ -403,9 +415,8 @@ impl KBInner {
         let doc_ids: Vec<i64> = {
             let guard = self.db.lock().await;
             let mut stmt = guard.conn.prepare("SELECT doc_id FROM documents WHERE status='parsed'")?;
-            stmt.query_map([], |row| row.get(0))?
-                .filter_map(|r| r.ok())
-                .collect()
+            let mapped = stmt.query_map([], |row| row.get(0))?;
+            mapped.filter_map(|r| r.ok()).collect()
         };
 
         for doc_id in doc_ids {

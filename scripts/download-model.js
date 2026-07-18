@@ -15,7 +15,7 @@ const crypto = require('crypto')
 
 const MODEL_DIR = path.join(__dirname, '..', 'models', 'multilingual-e5-small')
 const BASE_URL = process.env.KB_MODELS_MIRROR ||
-    'https://huggingface.co/intfloat/multilingual-e5-small/resolve/main'
+    'https://huggingface.co/Xenova/multilingual-e5-small/resolve/main'
 
 const FILES = [
     {
