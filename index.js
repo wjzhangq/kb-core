@@ -33,11 +33,11 @@ function getBinding() {
   }
 
   try {
-    return require(`@kb-core/${triple}`)
+    return require(`@wjzhangq/kb-core-native-${triple}`)
   } catch (e) {
     throw new Error(
       `Failed to load kb-core native binding for ${platform}-${arch}.\n` +
-      `Tried: ${localPath} and @kb-core/${triple}\n` +
+      `Tried: ${localPath} and @wjzhangq/kb-core-native-${triple}\n` +
       `Original error: ${e.message}`
     )
   }

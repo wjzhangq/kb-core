@@ -120,8 +120,9 @@ jobs:
 
       # prepublishOnly hook (napi pre-publish) publishes the sub-packages and
       # rewrites optionalDependencies before npm publishes the root package.
+      # access:public comes from publishConfig in package.json (root + sub-packages).
       - name: Publish to npm
-        run: npm publish --access public
+        run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

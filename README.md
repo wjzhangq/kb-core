@@ -1,11 +1,18 @@
-# kb-core
+# @wjzhangq/kb-core
+
+[![npm](https://img.shields.io/npm/v/@wjzhangq/kb-core.svg)](https://www.npmjs.com/package/@wjzhangq/kb-core)
 
 本地优先的知识库召回引擎：BM25 全文检索 + multilingual-e5-small 向量搜索 + RRF 融合排名。纯 Node.js 原生插件（napi-rs）。搜索时零 LLM 调用、零网络请求。
+
+- npm 主包：https://www.npmjs.com/package/@wjzhangq/kb-core
+- 平台原生包（自动作为 optionalDependencies 安装）：
+  - https://www.npmjs.com/package/@wjzhangq/kb-core-native-linux-x64-gnu
+  - https://www.npmjs.com/package/@wjzhangq/kb-core-native-win32-x64-msvc
 
 ## 安装
 
 ```bash
-npm install kb-core
+npm install @wjzhangq/kb-core
 # postinstall 会将 multilingual-e5-small ONNX 模型（约 60 MB）下载到 models/ 目录
 ```
 
@@ -25,7 +32,7 @@ new KnowledgeBase({ dataDir: '...', inference: { mode: 'local-first', modelsDir:
 ## 快速开始
 
 ```js
-const { KnowledgeBase } = require('kb-core')
+const { KnowledgeBase } = require('@wjzhangq/kb-core')
 const path = require('path')
 
 const kb = new KnowledgeBase({
@@ -104,6 +111,36 @@ BM25 + 向量混合搜索，RRF 融合排名。全部本地执行，零网络请
 | 不需要向量嵌入，优先速度 | `mode: 'bm25-only'` |
 | 自托管嵌入服务 | `mode: 'remote'`，配合 `embedEndpoint` |
 | PDF / 图片文档 | 配置 `inference.parse.endpoint` |
+
+## 从源码本机编译
+
+如需自行编译（贡献代码、调试、或目标平台不在预编译列表中），需要先安装 Rust 工具链和 Node.js ≥ 18：
+
+```bash
+# 1. 安装 Rust（如已安装可跳过）
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# 2. 克隆并安装依赖
+git clone https://github.com/owner/kb-core.git
+cd kb-core
+npm install
+
+# 3a. 开发构建（未优化，编译快）
+npm run build:debug
+
+# 3b. 生产构建（--release 优化，推荐发布前使用）
+npm run build
+```
+
+编译成功后会在项目根目录生成 `kb-core.<platform>-<arch>.node` 和 `index.d.ts`，
+直接 `require` 本地路径即可使用，无需发布到 npm：
+
+```js
+const { KnowledgeBase } = require('/path/to/kb-core')
+```
+
+> **注意**：Windows 需额外安装 [MSVC 构建工具](https://visualstudio.microsoft.com/visual-cpp-build-tools/)；
+> Linux 需要 `gcc`/`g++` 及 `pkg-config`。
 
 ## CI 与发布
 
