@@ -59,13 +59,13 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Install @napi-rs/cli
         run: npm install -g @napi-rs/cli@3
 
       - name: Install npm deps
-        run: npm ci --ignore-scripts
+        run: npm install --ignore-scripts
 
       # ort-download-binaries fetches ONNX Runtime at build time and links it
       # statically into the .node, so each artifact is self-contained.
@@ -98,14 +98,14 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
       - name: Install @napi-rs/cli
         run: npm install -g @napi-rs/cli@3
 
       - name: Install npm deps
-        run: npm ci --ignore-scripts
+        run: npm install --ignore-scripts
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
