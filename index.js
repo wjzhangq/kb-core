@@ -43,4 +43,42 @@ function getBinding() {
   }
 }
 
-module.exports = getBinding()
+// ── Public error types ──────────────────────────────────────────────────
+// The native binding throws `napi::Error` with message strings prefixed by
+// the error name (e.g. "KBModelMismatchError: ..."). These classes expose the
+// documented public API (node-api.md) so callers can `instanceof`-check and
+// read the typed diagnostic fields.
+
+class KBLockError extends Error {
+  constructor(message, heldBy) {
+    super(message)
+    this.name = 'KBLockError'
+    if (heldBy !== undefined) this.heldBy = heldBy
+  }
+}
+
+class KBModelMismatchError extends Error {
+  constructor(message, expected, found) {
+    super(message)
+    this.name = 'KBModelMismatchError'
+    if (expected !== undefined) this.expected = expected
+    if (found !== undefined) this.found = found
+  }
+}
+
+class ModelNotFoundError extends Error {
+  constructor(message, modelsDir, modelName) {
+    super(message)
+    this.name = 'ModelNotFoundError'
+    if (modelsDir !== undefined) this.modelsDir = modelsDir
+    if (modelName !== undefined) this.modelName = modelName
+  }
+}
+
+const binding = getBinding()
+
+module.exports = Object.assign({}, binding, {
+  KBLockError,
+  KBModelMismatchError,
+  ModelNotFoundError,
+})

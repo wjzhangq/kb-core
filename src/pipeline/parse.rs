@@ -16,10 +16,10 @@ pub fn start_parse_queue(
     tantivy: Arc<TantivyIndex>,
     embed_tx: mpsc::Sender<i64>,
     max_concurrency: usize,
-) -> mpsc::Sender<i64> {
+) -> (mpsc::Sender<i64>, tokio::task::JoinHandle<()>) {
     let (tx, mut rx) = mpsc::channel::<i64>(256);
 
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrency));
 
         while let Some(doc_id) = rx.recv().await {
@@ -45,9 +45,18 @@ pub fn start_parse_queue(
                 }
             });
         }
+
+        // Channel closed (all senders dropped by close()). Drain in-flight
+        // process_doc tasks before returning: acquiring every permit succeeds
+        // only once each detached task has finished and released its db /
+        // tantivy Arc clone. Without this, close() could drop the DbConn while
+        // a parse task still holds a clone, leaving the kb.db handle open.
+        let _ = semaphore.acquire_many(max_concurrency as u32).await;
+        // Drop the last embed_tx clone so the embed queue observes channel close.
+        drop(embed_tx);
     });
 
-    tx
+    (tx, handle)
 }
 
 async fn process_doc(

@@ -3,8 +3,9 @@
 
 use napi_derive::napi;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use anyhow::Result;
 use rusqlite::params;
 
@@ -43,11 +44,29 @@ pub struct ModelNotFoundErrorClass {}
 struct KBInner {
     config: Arc<KBConfig>,
     db: Arc<Mutex<DbConn>>,
-    tantivy: Arc<TantivyIndex>,
+    // Takeable so close() can drop the last Arc<TantivyIndex> after the workers
+    // are joined. Dropping it releases tantivy's Index + singleton IndexReader,
+    // which hold mmap handles on the tantivy/ segment files. Windows can't
+    // delete a mapped file (POSIX can, so Linux/macOS masked this), so leaving
+    // them open would trip EBUSY on rmSync right after kb.db is freed.
+    tantivy: Mutex<Option<Arc<TantivyIndex>>>,
+    embed_engine: Option<Arc<EmbedEngine>>,
+    // Wrapped in Mutex<Option<..>> so close() can take() the senders (dropping
+    // them signals the worker loops to exit) and the JoinHandles (to await that
+    // exit) exactly once. After a clean shutdown the workers no longer hold
+    // their Arc<Mutex<DbConn>> / Arc<TantivyIndex> clones, letting the OS handle
+    // on kb.db drop — required for Windows, where an open file can't be
+    // unlinked (POSIX allows it, so Linux/macOS masked this bug).
+    shutdown: Mutex<Option<Shutdown>>,
+}
+
+/// Owns everything that must be torn down before the SQLite file handle and
+/// flock are released. Held inside `KBInner::shutdown` and consumed by close().
+struct Shutdown {
     parse_tx: tokio::sync::mpsc::Sender<i64>,
     embed_tx: tokio::sync::mpsc::Sender<i64>,
-    embed_engine: Option<Arc<EmbedEngine>>,
-    closed: AtomicBool,
+    parse_task: JoinHandle<()>,
+    embed_task: JoinHandle<()>,
 }
 
 #[napi]
@@ -157,13 +176,13 @@ impl KBInner {
             _ => None,
         };
 
-        let embed_tx = pipeline::embed::start_embed_queue(
+        let (embed_tx, embed_task) = pipeline::embed::start_embed_queue(
             config.clone(),
             db.clone(),
             embed_engine.clone(),
         );
 
-        let parse_tx = pipeline::parse::start_parse_queue(
+        let (parse_tx, parse_task) = pipeline::parse::start_parse_queue(
             config.clone(),
             db.clone(),
             tantivy.clone(),
@@ -174,11 +193,14 @@ impl KBInner {
         Ok(KBInner {
             config,
             db,
-            tantivy,
-            parse_tx,
-            embed_tx,
+            tantivy: Mutex::new(Some(tantivy)),
             embed_engine,
-            closed: AtomicBool::new(false),
+            shutdown: Mutex::new(Some(Shutdown {
+                parse_tx,
+                embed_tx,
+                parse_task,
+                embed_task,
+            })),
         })
     }
 
@@ -222,8 +244,17 @@ impl KBInner {
         } // guard dropped here — lock released before any .await
 
         // Safe to await channel sends now that the DB lock is free.
-        for doc_id in to_enqueue {
-            let _ = self.parse_tx.send(doc_id).await;
+        // Clone the sender out of `shutdown` so we don't hold that lock across
+        // the awaits below. If close() has already run, the queue is gone and
+        // enqueuing is a no-op.
+        let parse_tx = {
+            let guard = self.shutdown.lock().await;
+            guard.as_ref().map(|s| s.parse_tx.clone())
+        };
+        if let Some(parse_tx) = parse_tx {
+            for doc_id in to_enqueue {
+                let _ = parse_tx.send(doc_id).await;
+            }
         }
 
         Ok(results)
@@ -232,8 +263,13 @@ impl KBInner {
     async fn search(&self, query: String, options: Option<JsSearchOptions>) -> Result<JsSearchResponse> {
         let opts = options.map(js_opts_to_opts).unwrap_or_default();
 
+        // Clone the Arc out of the Mutex so the tantivy lock isn't held across
+        // the (awaited) search. None means close() has already run.
+        let tantivy = self.tantivy.lock().await.clone()
+            .ok_or_else(|| anyhow::anyhow!("KnowledgeBase is closed"))?;
+
         let (results, timing, mode, vec_coverage, degraded) = search::run_search(
-            &query, &opts, &self.config, &self.db, &self.tantivy, &self.embed_engine,
+            &query, &opts, &self.config, &self.db, &tantivy, &self.embed_engine,
         ).await?;
 
         let js_results: Vec<JsSearchResult> = results.into_iter().map(|r| {
@@ -422,23 +458,56 @@ impl KBInner {
             mapped.filter_map(|r| r.ok()).collect()
         };
 
-        for doc_id in doc_ids {
-            let _ = self.embed_tx.send(doc_id).await;
+        let embed_tx = {
+            let guard = self.shutdown.lock().await;
+            guard.as_ref().map(|s| s.embed_tx.clone())
+        };
+        if let Some(embed_tx) = embed_tx {
+            for doc_id in doc_ids {
+                let _ = embed_tx.send(doc_id).await;
+            }
         }
 
         Ok(())
     }
 
     async fn close(&self) -> Result<()> {
-        if self.closed.swap(true, Ordering::SeqCst) {
-            return Ok(()); // already closed — idempotent
+        // Take the shutdown state exactly once. A second close() finds None and
+        // returns Ok — idempotent.
+        let Some(shutdown) = self.shutdown.lock().await.take() else {
+            return Ok(());
+        };
+        let Shutdown { parse_tx, embed_tx, parse_task, embed_task } = shutdown;
+
+        // 1. Drop both senders so the worker loops observe channel close and
+        //    exit. The parse worker drains its in-flight tasks, then drops its
+        //    own embed_tx clone; dropping ours here removes the last one so the
+        //    embed worker's recv() also returns None.
+        drop(parse_tx);
+        drop(embed_tx);
+
+        // 2. Wait for the workers to finish. Once both tasks return, no task
+        //    holds an Arc<Mutex<DbConn>> or Arc<TantivyIndex> clone anymore.
+        let _ = parse_task.await;
+        let _ = embed_task.await;
+
+        // 3. Take the tantivy Arc out and, after committing the writer, drop it.
+        //    With the workers joined this is the last strong reference, so the
+        //    drop releases the Index + IndexReader — and thus the mmap handles
+        //    on the tantivy/ segment files that would otherwise block deletion
+        //    on Windows. (No-op if a prior close() already took it.)
+        if let Some(tantivy) = self.tantivy.lock().await.take() {
+            tantivy.close()?;
+            drop(tantivy);
         }
 
-        // Commit tantivy
-        self.tantivy.close()?;
-
-        // SQLite closes on Drop (DbConn contains Connection which drops on close)
-        // flock releases on Drop of KBLock inside DbConn
+        // 4. Release SQLite + flock in place. Workers are joined, so locking
+        //    succeeds immediately; release_handles() swaps the file-backed
+        //    Connection for a throwaway in-memory one (dropping the old one
+        //    closes the kb.db / -wal / -shm handles) and drops the KBLock
+        //    (releasing .writer.lock). This lets callers delete the data dir
+        //    on Windows, where open handles block unlink.
+        self.db.lock().await.release_handles();
 
         Ok(())
     }

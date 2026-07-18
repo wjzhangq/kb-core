@@ -13,10 +13,10 @@ pub fn start_embed_queue(
     config: Arc<KBConfig>,
     db: Arc<tokio::sync::Mutex<DbConn>>,
     embed_engine: Option<Arc<EmbedEngine>>,
-) -> mpsc::Sender<i64> {
+) -> (mpsc::Sender<i64>, tokio::task::JoinHandle<()>) {
     let (tx, mut rx) = mpsc::channel::<i64>(256);
 
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         while let Some(doc_id) = rx.recv().await {
             let Some(ref engine) = embed_engine else { continue };
             let batch_size = config.processing.embed_batch_size;
@@ -25,9 +25,12 @@ pub fn start_embed_queue(
                 tracing::error!("embed failed for doc {}: {:#}", doc_id, e);
             }
         }
+        // Channel closed (all senders dropped). Loop exits; the captured `db`
+        // and `embed_engine` Arc clones drop here, releasing this task's hold
+        // on the SQLite connection so close() can drop the last reference.
     });
 
-    tx
+    (tx, handle)
 }
 
 async fn process_embed(

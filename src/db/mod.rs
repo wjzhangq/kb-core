@@ -84,4 +84,25 @@ impl DbConn {
         .context("configure SQLite pragmas")?;
         Ok(())
     }
+
+    /// Release all OS handles this connection holds — the kb.db/-wal/-shm file
+    /// descriptors and the `.writer.lock` advisory lock — without consuming the
+    /// `DbConn` (which lives behind `Arc<Mutex<..>>` and can't be moved out on
+    /// close). The live file-backed `Connection` is swapped for a throwaway
+    /// in-memory one and dropped, which closes the SQLite handles and
+    /// checkpoints/removes the WAL sidecar files; dropping `_lock` releases the
+    /// flock. Idempotent: a second call just replaces an already-in-memory conn.
+    ///
+    /// Required on Windows, where an open file handle blocks `unlink`. On POSIX
+    /// unlink succeeds regardless, so this only affects whether a caller can
+    /// delete the data dir immediately after `close()`.
+    pub fn release_handles(&mut self) {
+        // In-memory open needs no filesystem access and effectively never fails;
+        // if it somehow did, keep the existing connection rather than panic.
+        if let Ok(mem) = Connection::open_in_memory() {
+            let old = std::mem::replace(&mut self.conn, mem);
+            drop(old);
+        }
+        self._lock = None;
+    }
 }
