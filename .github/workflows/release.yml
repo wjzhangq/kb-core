@@ -1,6 +1,8 @@
-name: Publish
+name: Release
 
-# Compile + publish ONLY on version tags. Nothing builds off-tag.
+# Compile + pack + create a GitHub Release ONLY on version tags.
+# This job never publishes to npm — that is a separate, manually triggered
+# workflow (publish-npm.yml) that pulls the .tgz files from the Release.
 on:
   push:
     tags:
@@ -84,14 +86,15 @@ jobs:
           path: "*.node"
           if-no-files-found: error
 
-  # ---- Publish root package + per-platform sub-packages to npm ----
-  publish:
-    name: Publish to npm
+  # ---- Pack root + per-platform packages into .tgz and attach to a GitHub Release ----
+  # No npm publish here. Publishing is done manually via publish-npm.yml, which
+  # downloads these .tgz files. That lets npm publish be retried without recompiling.
+  release:
+    name: Pack & create GitHub Release
     runs-on: ubuntu-22.04
     needs: build
     permissions:
-      contents: read
-      id-token: write
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -99,7 +102,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          registry-url: "https://registry.npmjs.org"
 
       - name: Install @napi-rs/cli
         run: npm install -g @napi-rs/cli@3
@@ -118,11 +120,30 @@ jobs:
           napi create-npm-dirs
           napi artifacts --output-dir artifacts
 
-      # prepublishOnly hook (napi pre-publish) publishes the sub-packages and
-      # rewrites optionalDependencies before npm publishes the root package.
-      # access:public comes from publishConfig in package.json (root + sub-packages).
-      - name: Publish to npm
-        run: npm publish
+      # Rewrite the root package's optionalDependencies to the tag version and
+      # copy the addons into npm/<triple>/, WITHOUT publishing anything.
+      - name: Rewrite optionalDependencies (no publish)
+        run: napi pre-publish -t npm --skip-optional-publish
+
+      # Pack each per-platform sub-package and the root package into .tgz.
+      # npm pack does NOT run the prepublishOnly hook, so this never publishes.
+      - name: Pack tarballs
+        run: |
+          mkdir -p dist
+          for d in npm/*/; do
+            npm pack "./$d" --pack-destination dist
+          done
+          npm pack . --pack-destination dist
+          ls -la dist
+
+      # Create the Release (or upload to it if it already exists, e.g. re-run).
+      - name: Create GitHub Release
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.tgz --clobber
+          else
+            gh release create "$TAG" dist/*.tgz --generate-notes --title "$TAG"
+          fi

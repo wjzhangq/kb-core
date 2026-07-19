@@ -1,0 +1,47 @@
+name: Publish to npm
+
+# Manually triggered. Downloads the pre-packed .tgz files from a GitHub Release
+# (created by release.yml) and publishes them to npm. Safe to re-run: already
+# published versions are skipped, and nothing is recompiled.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v0.0.1)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish ${{ inputs.tag }} to npm
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      # Write the token value directly into .npmrc. setup-node only writes a
+      # ${NODE_AUTH_TOKEN} placeholder, which fails to expand for tarball
+      # publishes of scoped packages → EOTP. Hardcoding the value avoids that.
+      - name: Configure npm auth
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+          echo "always-auth=true" >> ~/.npmrc
+
+      - name: Download release tarballs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: gh release download "$TAG" --pattern '*.tgz' --dir dist
+
+      - name: Publish to npm
+        run: bash scripts/publish-from-release.sh dist
