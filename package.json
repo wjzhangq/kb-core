@@ -35,7 +35,8 @@
     "index.d.ts",
     "*.node",
     "scripts/",
-    "models/"
+    "models/",
+    "README.md"
   ],
   "keywords": ["knowledge-base", "bm25", "embeddings", "rag", "napi-rs"],
   "devDependencies": {
