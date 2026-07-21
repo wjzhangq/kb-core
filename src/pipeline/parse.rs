@@ -115,8 +115,8 @@ async fn process_doc(
                     continue;
                 };
                 guard.conn.execute(
-                    "INSERT OR REPLACE INTO blocks(doc_id, block_id, type, page, bbox, from_image, lin_start, lin_end)
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                    "INSERT OR REPLACE INTO blocks(doc_id, block_id, type, page, bbox, from_image, lin_start, lin_end, description)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
                     params![
                         doc_id,
                         b.block_id as i64,
@@ -126,8 +126,44 @@ async fn process_doc(
                         b.from_image as i64,
                         lin_start,
                         lin_end,
+                        b.description.as_deref(),
                     ],
                 )?;
+            }
+
+            // Flatten outline nodes as outline_heading blocks (appended after content blocks)
+            // so they participate in BM25 and vector search.
+            if let Some(outline) = &okf.outline {
+                let mut next_block_id = okf.blocks.iter().map(|b| b.block_id).max().map(|m| m + 1).unwrap_or(0);
+                let mut outline_queue: Vec<&crate::parse::OutlineNode> = outline.iter().collect();
+                let mut lin_pos = if let Some(&(_, end)) = lin_blocks.values().max_by_key(|(_, e)| e) {
+                    end + 2 // after the last block's "\n\n"
+                } else {
+                    0
+                };
+                while !outline_queue.is_empty() {
+                    let batch: Vec<&crate::parse::OutlineNode> = outline_queue.drain(..).collect();
+                    for node in batch {
+                        let title = &node.title;
+                        let lin_start = lin_pos;
+                        let lin_end = lin_pos + title.len() as i64;
+                        guard.conn.execute(
+                            "INSERT OR IGNORE INTO blocks(doc_id, block_id, type, page, bbox, from_image, lin_start, lin_end, description)
+                             VALUES (?1,?2,?3,?4,NULL,0,?5,?6,NULL)",
+                            params![
+                                doc_id,
+                                next_block_id as i64,
+                                crate::parse::BlockType::OutlineHeading.as_str(),
+                                node.page.map(|p| p as i64),
+                                lin_start,
+                                lin_end,
+                            ],
+                        )?;
+                        next_block_id += 1;
+                        lin_pos = lin_end + 2;
+                        outline_queue.extend(node.children.iter());
+                    }
+                }
             }
 
             // Store chunks + add to tantivy
@@ -221,13 +257,26 @@ async fn try_parse(
 /// Returns (linear_text, HashMap<block_id, (lin_start, lin_end)>).
 /// Keying by block_id (FR-002) avoids out-of-bounds panics when block_ids
 /// are non-contiguous or non-zero-based.
+/// For image_ocr / image_caption blocks, description is appended after text
+/// so both OCR content and visual description enter the same BM25/vector index.
 pub fn build_linear_text(blocks: &[OkfBlock]) -> (String, HashMap<u32, (i64, i64)>) {
     let mut result = String::new();
     let mut spans: HashMap<u32, (i64, i64)> = HashMap::with_capacity(blocks.len());
 
     for (i, block) in blocks.iter().enumerate() {
         let start = result.len() as i64;
-        result.push_str(&block.text);
+        // For image blocks, append the model-generated description after OCR text.
+        let content = match (&block.block_type, &block.description) {
+            (crate::parse::BlockType::ImageOcr | crate::parse::BlockType::ImageCaption, Some(desc)) if !desc.is_empty() => {
+                if block.text.is_empty() {
+                    desc.clone()
+                } else {
+                    format!("{}\n{}", block.text, desc)
+                }
+            }
+            _ => block.text.clone(),
+        };
+        result.push_str(&content);
         let end = result.len() as i64;
         spans.insert(block.block_id, (start, end));
         if i + 1 < blocks.len() {

@@ -57,6 +57,7 @@ fn extract_local_inner(path: &Path, doc_id: i64, cfg: &ProcessingConfig) -> Resu
                 block_id: 0,
                 block_type: BlockType::Para,
                 text: format!("[binary file: {}]", path.display()),
+                description: None,
                 page: None,
                 bbox: None,
                 from_image: false,
@@ -69,6 +70,7 @@ fn extract_local_inner(path: &Path, doc_id: i64, cfg: &ProcessingConfig) -> Resu
         source_path: path.to_string_lossy().into_owned(),
         parsed_by: ParsedBy::Local,
         blocks,
+        outline: None,
     })
 }
 
@@ -95,6 +97,7 @@ fn split_text_into_blocks(text: &str) -> Vec<OkfBlock> {
                 block_id: i as u32,
                 block_type,
                 text: trimmed.to_string(),
+                description: None,
                 page: None,
                 bbox: None,
                 from_image: false,
@@ -110,6 +113,7 @@ fn extract_code_file(path: &Path, _ext: &str) -> Result<Vec<OkfBlock>> {
         block_id: 0,
         block_type: BlockType::Code,
         text: content,
+        description: None,
         page: None,
         bbox: None,
         from_image: false,
@@ -127,6 +131,7 @@ fn extract_eml(path: &Path) -> Result<Vec<OkfBlock>> {
             block_id: 0,
             block_type: BlockType::Para,
             text: body.trim().to_string(),
+            description: None,
             page: None,
             bbox: None,
             from_image: false,

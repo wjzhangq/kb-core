@@ -1,0 +1,363 @@
+openapi: 3.1.0
+info:
+  title: kb-core Remote Parse Service
+  version: 1.0.0
+  description: |
+    kb-core 远程解析服务契约。
+    服务接收文档文件，返回结构化块清单（OKF），供 kb-core 建立全文和向量索引。
+
+    **支持的文件类型**：PDF、PPTX、DOCX、PNG、JPG、JPEG、GIF、WEBP
+
+    **触发条件**：kb-core 仅在以下情况调用此服务：
+    - 图片文件（.png/.jpg 等）
+    - PPTX 文件
+    - PDF 文件文本层覆盖率低于 `textLayerThreshold`（默认 0.8）
+
+    **熔断保护**：5xx 和超时计入失败次数，连续 5 次失败后熔断器打开；4xx 不计入。
+
+paths:
+  /v1/parse:
+    post:
+      operationId: parseDocument
+      summary: 解析文档，返回结构化块清单（OKF）
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: 文件二进制内容
+                options:
+                  $ref: '#/components/schemas/ParseOptions'
+            encoding:
+              file:
+                contentType: application/octet-stream
+              options:
+                contentType: application/json
+      responses:
+        '200':
+          description: 解析成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ParseResponse'
+              examples:
+                pdf_with_image:
+                  summary: PDF 含图表
+                  value:
+                    okf:
+                      parsedBy: remote
+                      blocks:
+                        - blockId: 0
+                          type: heading
+                          text: 产品架构概述
+                          page: 1
+                          fromImage: false
+                        - blockId: 1
+                          type: para
+                          text: 本文档介绍系统三层架构设计。
+                          page: 1
+                          fromImage: false
+                        - blockId: 2
+                          type: image_ocr
+                          text: "Q1: 1.2M  Q2: 1.8M  Q3: 2.4M"
+                          description: 柱状图，展示Q1至Q3季度营收对比，Q3最高达2.4M
+                          page: 2
+                          bbox: [120.0, 300.0, 480.0, 520.0]
+                          fromImage: true
+                        - blockId: 3
+                          type: image_caption
+                          text: ""
+                          description: 系统三层架构示意图，从上到下依次为前端层、服务层、数据层
+                          page: 3
+                          bbox: [80.0, 100.0, 520.0, 400.0]
+                          fromImage: true
+                      outline:
+                        - title: 产品架构概述
+                          page: 1
+                          level: 1
+                          blockId: 0
+                        - title: 营收数据
+                          page: 2
+                          level: 1
+                pptx_with_outline:
+                  summary: PPT 含大纲
+                  value:
+                    okf:
+                      parsedBy: remote
+                      blocks:
+                        - blockId: 0
+                          type: heading
+                          text: 技术选型
+                          page: 1
+                          fromImage: false
+                        - blockId: 1
+                          type: para
+                          text: 本次选型对比了三种方案。
+                          page: 1
+                          fromImage: false
+                      outline:
+                        - title: 技术选型
+                          page: 1
+                          level: 1
+                          blockId: 0
+                          children:
+                            - title: 方案对比
+                              page: 2
+                              level: 2
+                            - title: 最终决策
+                              page: 4
+                              level: 2
+        '400':
+          description: 请求格式错误（不计入熔断失败次数）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                unsupported_type:
+                  value:
+                    error: unsupported_file_type
+                    message: "文件类型 .xlsx 不支持，支持：pdf, pptx, docx, png, jpg, jpeg, gif, webp"
+                file_too_large:
+                  value:
+                    error: file_too_large
+                    message: "文件大小 256MB 超过限制 100MB"
+        '422':
+          description: 文件可读但解析失败（不计入熔断失败次数）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                parse_failed:
+                  value:
+                    error: parse_failed
+                    message: "PDF 文件损坏，无法提取内容"
+        '500':
+          description: 服务内部错误（计入熔断失败次数）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 服务不可用（计入熔断失败次数）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+
+    ParseOptions:
+      type: object
+      description: 解析选项，作为 multipart 中的 `options` 字段（application/json）
+      properties:
+        textLayerThreshold:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          default: 0.8
+          description: |
+            PDF 文本层覆盖率阈值。
+            低于此值的 PDF 页面视为扫描件，触发 OCR；高于此值直接提取文本层。
+        enableImageDescription:
+          type: boolean
+          default: true
+          description: 是否对图片块生成模型视觉描述（description 字段）
+        enableOutline:
+          type: boolean
+          default: true
+          description: 是否提取文档大纲（PDF 书签树 / PPT 幻灯片标题列表）
+      example:
+        textLayerThreshold: 0.8
+        enableImageDescription: true
+        enableOutline: true
+
+    ParseResponse:
+      type: object
+      required:
+        - okf
+      properties:
+        okf:
+          $ref: '#/components/schemas/Okf'
+
+    Okf:
+      type: object
+      required:
+        - parsedBy
+        - blocks
+      properties:
+        parsedBy:
+          type: string
+          enum: [remote]
+          description: 固定为 "remote"，表示由远程服务解析
+        blocks:
+          type: array
+          items:
+            $ref: '#/components/schemas/OkfBlock'
+          description: 结构化块清单，顺序对应文档阅读顺序
+        outline:
+          type: array
+          items:
+            $ref: '#/components/schemas/OutlineNode'
+          description: |
+            文档大纲（可选）。
+            PDF 来源：书签树；PPT 来源：幻灯片标题列表。
+            节点按文档顺序排列，通过 children 表达层级。
+
+    OkfBlock:
+      type: object
+      required:
+        - blockId
+        - type
+        - text
+        - fromImage
+      properties:
+        blockId:
+          type: integer
+          format: int32
+          minimum: 0
+          description: 块在本文档内的唯一序号，从 0 开始单调递增
+        type:
+          type: string
+          enum:
+            - heading
+            - para
+            - list
+            - table
+            - code
+            - image_ocr
+            - image_caption
+          description: |
+            块类型：
+            - `heading`：标题（对应 Markdown #）
+            - `para`：正文段落
+            - `list`：列表
+            - `table`：表格（text 为表格文字内容）
+            - `code`：代码块
+            - `image_ocr`：图片中含可识别文字，text 为 OCR 结果，description 为模型视觉描述
+            - `image_caption`：纯视觉图片（无文字或文字极少），text 为空，description 为模型视觉描述
+        text:
+          type: string
+          description: |
+            块的纯文本内容。
+            `image_ocr` 时为 OCR 识别的文字；`image_caption` 时为空字符串。
+        description:
+          type: string
+          description: |
+            模型生成的图片视觉描述（仅 `image_ocr` 和 `image_caption` 类型填充）。
+            用自然语言描述图片的视觉内容，如"柱状图，展示Q1-Q3营收对比"。
+            kb-core 索引时将 text 与 description 拼接后共同进入 BM25 和向量索引。
+        page:
+          type: integer
+          format: int32
+          minimum: 1
+          description: 块所在页码（1-based）。纯文本文件无页码时省略。
+        bbox:
+          type: array
+          items:
+            type: number
+            format: float
+          minItems: 4
+          maxItems: 4
+          description: |
+            版面坐标 [x0, y0, x1, y1]，单位为点（pt）。
+            坐标系原点为页面左上角，x 向右，y 向下。
+            本地文本文件通常无坐标，省略此字段。
+        fromImage:
+          type: boolean
+          description: 该块内容是否来源于图片（OCR 或视觉描述）。用于 kb-core 透传 `ChunkResult.fromImage`。
+      examples:
+        - blockId: 0
+          type: heading
+          text: 第一章 系统概述
+          page: 1
+          fromImage: false
+        - blockId: 3
+          type: image_ocr
+          text: "Revenue Q3: $2.4M"
+          description: 柱状图，展示四个季度营收趋势，Q3达到峰值2.4M美元
+          page: 5
+          bbox: [120.0, 300.0, 480.0, 520.0]
+          fromImage: true
+        - blockId: 4
+          type: image_caption
+          text: ""
+          description: 微服务架构拓扑图，包含API网关、用户服务、订单服务、消息队列四个节点
+          page: 6
+          bbox: [80.0, 100.0, 520.0, 400.0]
+          fromImage: true
+
+    OutlineNode:
+      type: object
+      required:
+        - title
+        - level
+      properties:
+        title:
+          type: string
+          description: 章节或幻灯片标题
+        page:
+          type: integer
+          format: int32
+          minimum: 1
+          description: 对应页码（1-based）
+        level:
+          type: integer
+          format: int32
+          minimum: 1
+          description: 层级深度，1 为顶层，2 为二级，以此类推
+        blockId:
+          type: integer
+          format: int32
+          description: 对应 blocks 中的 heading 块 blockId（可选，便于 kb-core 建立关联）
+        children:
+          type: array
+          items:
+            $ref: '#/components/schemas/OutlineNode'
+          description: 子节点列表
+      example:
+        title: 技术架构
+        page: 3
+        level: 1
+        blockId: 5
+        children:
+          - title: 前端层
+            page: 3
+            level: 2
+          - title: 服务层
+            page: 5
+            level: 2
+          - title: 数据层
+            page: 7
+            level: 2
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: 错误码（machine-readable）
+          enum:
+            - unsupported_file_type
+            - file_too_large
+            - parse_failed
+            - internal_error
+        message:
+          type: string
+          description: 人类可读的错误描述
+      example:
+        error: unsupported_file_type
+        message: "文件类型 .xlsx 不支持"

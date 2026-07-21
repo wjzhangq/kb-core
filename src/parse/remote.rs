@@ -128,6 +128,7 @@ impl RemoteParser {
             block_id: b.block_id,
             block_type: parse_block_type(&b.r#type),
             text: b.text,
+            description: b.description,
             page: b.page,
             bbox: b.bbox.map(|v| {
                 let a: Vec<f32> = v;
@@ -137,11 +138,14 @@ impl RemoteParser {
             from_image: b.from_image,
         }).collect();
 
+        let outline = body.okf.outline.map(|nodes| nodes.into_iter().map(convert_outline_node).collect());
+
         Ok(Okf {
             doc_id,
             source_path: path.to_string_lossy().into_owned(),
             parsed_by: ParsedBy::Remote,
             blocks,
+            outline,
         })
     }
 
@@ -157,7 +161,19 @@ fn parse_block_type(s: &str) -> BlockType {
         "table" => BlockType::Table,
         "code" => BlockType::Code,
         "image_ocr" => BlockType::ImageOcr,
+        "image_caption" => BlockType::ImageCaption,
+        "outline_heading" => BlockType::OutlineHeading,
         _ => BlockType::Para,
+    }
+}
+
+fn convert_outline_node(n: RemoteOutlineNode) -> crate::parse::OutlineNode {
+    crate::parse::OutlineNode {
+        title: n.title,
+        page: n.page,
+        level: n.level,
+        block_id: n.block_id,
+        children: n.children.unwrap_or_default().into_iter().map(convert_outline_node).collect(),
     }
 }
 
@@ -171,6 +187,7 @@ struct RemoteParseResponse {
 #[derive(Deserialize)]
 struct RemoteOkf {
     blocks: Vec<RemoteBlock>,
+    outline: Option<Vec<RemoteOutlineNode>>,
 }
 
 #[derive(Deserialize)]
@@ -180,8 +197,20 @@ struct RemoteBlock {
     #[serde(rename = "type")]
     r#type: String,
     text: String,
+    #[serde(default)]
+    description: Option<String>,
     page: Option<u32>,
     bbox: Option<Vec<f32>>,
     #[serde(rename = "fromImage", default)]
     from_image: bool,
+}
+
+#[derive(Deserialize)]
+struct RemoteOutlineNode {
+    title: String,
+    page: Option<u32>,
+    level: u32,
+    #[serde(rename = "blockId")]
+    block_id: Option<u32>,
+    children: Option<Vec<RemoteOutlineNode>>,
 }

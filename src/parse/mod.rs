@@ -8,6 +8,7 @@ pub struct Okf {
     pub source_path: String,
     pub parsed_by: ParsedBy,
     pub blocks: Vec<OkfBlock>,
+    pub outline: Option<Vec<OutlineNode>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +31,8 @@ pub struct OkfBlock {
     pub block_id: u32,
     pub block_type: BlockType,
     pub text: String,
+    /// Model-generated visual description (image_ocr / image_caption only).
+    pub description: Option<String>,
     pub page: Option<u32>,
     pub bbox: Option<[f32; 4]>,
     pub from_image: bool,
@@ -43,6 +46,10 @@ pub enum BlockType {
     Table,
     Code,
     ImageOcr,
+    /// Pure visual image — text is empty, description carries the content.
+    ImageCaption,
+    /// Flattened outline node written as a searchable block.
+    OutlineHeading,
 }
 
 impl BlockType {
@@ -54,8 +61,19 @@ impl BlockType {
             BlockType::Table => "table",
             BlockType::Code => "code",
             BlockType::ImageOcr => "image_ocr",
+            BlockType::ImageCaption => "image_caption",
+            BlockType::OutlineHeading => "outline_heading",
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct OutlineNode {
+    pub title: String,
+    pub page: Option<u32>,
+    pub level: u32,
+    pub block_id: Option<u32>,
+    pub children: Vec<OutlineNode>,
 }
 
 /// A parsed chunk ready for BM25 indexing.

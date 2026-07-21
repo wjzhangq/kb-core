@@ -33,6 +33,7 @@ pub const BBOX: &str = "bbox";
 pub const FROM_IMAGE: &str = "from_image";
 pub const LIN_START: &str = "lin_start";
 pub const LIN_END: &str = "lin_end";
+pub const DESCRIPTION: &str = "description";
 
 // embed_status values
 pub const EMBED_PENDING: i64 = 0;

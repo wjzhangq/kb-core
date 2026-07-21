@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
-pub const CURRENT_VERSION: i64 = 5;
+pub const CURRENT_VERSION: i64 = 6;
 
 const MIGRATION_001: &str = "
 CREATE TABLE IF NOT EXISTS documents (
@@ -75,6 +75,10 @@ CREATE TABLE IF NOT EXISTS blocks (
 CREATE INDEX IF NOT EXISTS idx_blocks_span ON blocks(doc_id, lin_start, lin_end);
 ";
 
+const MIGRATION_006: &str = "
+ALTER TABLE blocks ADD COLUMN description TEXT;
+";
+
 pub fn run_migrations(conn: &Connection) -> Result<()> {
     let version = get_schema_version(conn)?;
 
@@ -103,6 +107,11 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute_batch(MIGRATION_005)
             .context("migration 005 failed")?;
         set_schema_version(conn, 5)?;
+    }
+    if version < 6 {
+        conn.execute_batch(MIGRATION_006)
+            .context("migration 006 failed")?;
+        set_schema_version(conn, 6)?;
     }
 
     Ok(())
