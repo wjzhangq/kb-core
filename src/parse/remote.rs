@@ -472,11 +472,10 @@ mod tests {
     #[test]
     fn retry_after_overrides_backoff() {
         let computed_backoff = 8_000u64;
-        let server_hint: Option<u64> = Some(5_000);
-        let next = server_hint.unwrap_or(computed_backoff);
-        assert_eq!(next, 5_000);
-
-        let no_hint: Option<u64> = None;
-        assert_eq!(no_hint.unwrap_or(computed_backoff), 8_000);
+        // (server hint, expected next wait): a hint wins, absence falls back to backoff.
+        let cases: [(Option<u64>, u64); 2] = [(Some(5_000), 5_000), (None, computed_backoff)];
+        for (hint, expected) in cases {
+            assert_eq!(hint.unwrap_or(computed_backoff), expected);
+        }
     }
 }

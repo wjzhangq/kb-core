@@ -142,7 +142,7 @@ async fn process_doc(
                     0
                 };
                 while !outline_queue.is_empty() {
-                    let batch: Vec<&crate::parse::OutlineNode> = outline_queue.drain(..).collect();
+                    let batch: Vec<&crate::parse::OutlineNode> = std::mem::take(&mut outline_queue);
                     for node in batch {
                         let title = &node.title;
                         let lin_start = lin_pos;
