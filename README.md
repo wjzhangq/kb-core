@@ -250,8 +250,14 @@ new KnowledgeBase({
       endpoint: string,
       allowRemote?: boolean,             // 默认 true
       textLayerThreshold?: number,       // 0–1，默认 0.8（文字层覆盖率低于此值则走远程解析）
+      enableImageDescription?: boolean,  // 默认 true（调 Qwen 生成图片 description）
+      enableOutline?: boolean,           // 默认 true（提取大纲）
       onRemoteParseUnavailable?: 'wait' | 'text-only' | 'skip',  // 默认 'wait'
-      timeoutMs?: number,                // 默认 30000
+      timeoutMs?: number,                // 单次 HTTP 请求超时，默认 30000
+      // 异步轮询（大文件被服务端转异步时，见下文「异步解析」）
+      asyncPollInitialMs?: number,       // 首次轮询前的退避，默认 2000
+      asyncPollMaxMs?: number,           // 退避上限，默认 15000
+      asyncPollBudgetMs?: number,        // 轮询总预算，默认 1800000 (30 min)
       headers?: Record<string, string>,
       breaker?: {
         failureThreshold?: number,       // 默认 5
@@ -286,6 +292,25 @@ new KnowledgeBase({
 | 只需全文检索，不需要向量 | `mode: 'bm25-only'`，无需下载模型 |
 | 自托管嵌入服务 | `mode: 'remote'` + `embedEndpoint` |
 | PDF / 图片 OCR 解析 | 配置 `inference.parse.endpoint` |
+
+## 远程解析：同步与异步
+
+kb-core 始终调用同一个端点 `POST /v1/parse`，无需自行判断文件大小。服务端对大文件会自动转异步，客户端透明处理两种成功响应：
+
+- **200（快路径）** — 小文件直接返回 OKF，沿用同一套反序列化。
+- **202（自动转异步）** — 服务端估算耗时超预算时返回 `taskId`，kb-core 随即轮询 `GET /v1/tasks/{taskId}` 直到任务结束。轮询采用指数退避（初始 `asyncPollInitialMs` 2s、上限 `asyncPollMaxMs` 15s），优先采纳响应里的 `retryAfterMs`；总时长受 `asyncPollBudgetMs`（默认 30 min）约束，超出即按业务失败处理。
+
+**熔断语义**：只有服务故障才计入熔断器。
+
+| 情况 | 计入熔断 |
+|------|:---:|
+| `500` / `503`、网络错误 / 超时、成功响应体损坏 | 是 |
+| `400` / `422` / `429`（文件不支持、太大、队列满等） | 否 |
+| 异步任务 `status=failed`（HTTP 200 承载的业务失败） | 否 |
+| `404` / `410`（taskId 不存在 / 结果已过期） | 否 |
+| 轮询超出 `asyncPollBudgetMs` | 否 |
+
+关键约定：一份坏文档（解析失败）不会拖垮整个解析服务的可用性——只有真正的服务不可达才会打开熔断器。
 
 ## 错误处理
 

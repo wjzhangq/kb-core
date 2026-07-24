@@ -73,8 +73,18 @@ pub struct RemoteParseConfig {
     pub endpoint: String,
     pub allow_remote: bool,
     pub text_layer_threshold: f32,
+    pub enable_image_description: bool,
+    pub enable_outline: bool,
     pub on_remote_parse_unavailable: RemoteParseUnavailablePolicy,
+    /// Per-HTTP-request timeout (applies to each POST and each poll GET).
     pub timeout_ms: u64,
+    /// Async polling: initial backoff delay before the first status poll.
+    pub async_poll_initial_ms: u64,
+    /// Async polling: upper bound on the exponential backoff interval.
+    pub async_poll_max_ms: u64,
+    /// Async polling: overall wall-clock budget across all status polls.
+    /// Exceeding it fails the doc as a business error (not a service outage).
+    pub async_poll_budget_ms: u64,
     pub headers: HashMap<String, String>,
     pub breaker: BreakerConfig,
 }
@@ -159,8 +169,13 @@ pub struct JsRemoteParseConfig {
     pub endpoint: String,
     pub allow_remote: Option<bool>,
     pub text_layer_threshold: Option<f64>,
+    pub enable_image_description: Option<bool>,
+    pub enable_outline: Option<bool>,
     pub on_remote_parse_unavailable: Option<String>,
     pub timeout_ms: Option<f64>,
+    pub async_poll_initial_ms: Option<f64>,
+    pub async_poll_max_ms: Option<f64>,
+    pub async_poll_budget_ms: Option<f64>,
     pub headers: Option<HashMap<String, String>>,
     pub breaker: Option<JsBreakerConfig>,
 }
@@ -361,8 +376,13 @@ fn parse_remote_parse_config(js: JsRemoteParseConfig) -> RemoteParseConfig {
         endpoint: js.endpoint,
         allow_remote: js.allow_remote.unwrap_or(true),
         text_layer_threshold: js.text_layer_threshold.map(|v| v as f32).unwrap_or(0.8),
+        enable_image_description: js.enable_image_description.unwrap_or(true),
+        enable_outline: js.enable_outline.unwrap_or(true),
         on_remote_parse_unavailable: policy,
         timeout_ms: js.timeout_ms.map(|v| v as u64).unwrap_or(30_000),
+        async_poll_initial_ms: js.async_poll_initial_ms.map(|v| v as u64).unwrap_or(2_000),
+        async_poll_max_ms: js.async_poll_max_ms.map(|v| v as u64).unwrap_or(15_000),
+        async_poll_budget_ms: js.async_poll_budget_ms.map(|v| v as u64).unwrap_or(1_800_000),
         headers: js.headers.unwrap_or_default(),
         breaker,
     }

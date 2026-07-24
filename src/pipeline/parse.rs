@@ -381,9 +381,9 @@ mod tests {
     // T003: block list with non-contiguous IDs [0, 2, 5].
     fn non_contiguous_blocks() -> Vec<OkfBlock> {
         vec![
-            OkfBlock { block_id: 0, block_type: BlockType::Heading, text: "Section A".into(), page: None, bbox: None, from_image: false },
-            OkfBlock { block_id: 2, block_type: BlockType::Para, text: "Gap block (id=2)".into(), page: None, bbox: None, from_image: false },
-            OkfBlock { block_id: 5, block_type: BlockType::Para, text: "Sparse block (id=5)".into(), page: None, bbox: None, from_image: false },
+            OkfBlock { block_id: 0, block_type: BlockType::Heading, text: "Section A".into(), description: None, page: None, bbox: None, from_image: false },
+            OkfBlock { block_id: 2, block_type: BlockType::Para, text: "Gap block (id=2)".into(), description: None, page: None, bbox: None, from_image: false },
+            OkfBlock { block_id: 5, block_type: BlockType::Para, text: "Sparse block (id=5)".into(), description: None, page: None, bbox: None, from_image: false },
         ]
     }
 
